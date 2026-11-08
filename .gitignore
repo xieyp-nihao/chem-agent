@@ -1,0 +1,22 @@
+# Environment and Keys
+.env
+.venv/
+venv/
+
+# Operational Data
+data/
+*.db
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# tool/IDE
+.claude/
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,299 @@
+{
+  "version": "1.0",
+  "description": "文献参数抽取评测集（人工标注 ground truth）",
+  "cases": [
+    {
+      "paper_filename": "A DFT and microkinetic study of HCHO catalytic oxidation mechanism over Pd-Co3O4 catalysts-The effect of metal-oxide interface.pdf",
+      "notes": "Pd/Co3O4 界面模型：Co3O4(110)-B 支撑 slab 5 层，底部 2 层固定，真空 15 Å；模型同时包含 Pd(111) 纳米线/界面，surface 对象按支撑 slab 的 Co3O4(110) 记录。",
+      "expected_calculations": [
+        {
+          "calculation_type": "relax",
+          "functional": "PBE+U",
+          "functional_family": "PBE+U",
+          "encut_ev": 400.0,
+          "kpoints_scheme": "gamma",
+          "kpoints_mesh": [1, 1, 1],
+          "kpoints_spacing": null,
+          "hubbard_u": [
+            {"element": "Co", "orbital": "d", "u_ev": 3.0, "j_ev": 0.0}
+          ],
+          "surface": {
+            "miller": [1, 1, 0],
+            "layers": 5,
+            "vacuum_angstrom": 15.0,
+            "termination": "B",
+            "fixed_layers": 2,
+            "dipole_correction": null
+          },
+          "missing_fields_expected": [],
+          "evidence_expected": [
+            "encut_ev",
+            "kpoints_mesh",
+            "hubbard_u",
+            "surface.layers",
+            "surface.vacuum_angstrom",
+            "surface.fixed_layers"
+          ],
+          "notes": "方法段：1×1×1 k-point mesh；cutoff 400 eV；Co3O4(110)-B slab five layers thick，bottom two layers frozen；vacuum 15 Å；U_eff = 3。"
+        }
+      ]
+    },
+    {
+      "paper_filename": "First-principles study of oxygen evolution on Co3O4 with short-range ordered Ir doping-1-s2.0-S2468823122007386-main.pdf",
+      "notes": "Ir 掺杂 Co3O4 OER：bulk 与 slab 两套 k 点；slab 为 Co3O4(100)，8 个 Co 层，底部 4 层固定；原文未报告真空层厚度。",
+      "expected_calculations": [
+        {
+          "calculation_type": "relax",
+          "functional": "PBE+U",
+          "functional_family": "PBE+U",
+          "encut_ev": 400.0,
+          "kpoints_scheme": "monkhorst-pack",
+          "kpoints_mesh": [5, 5, 5],
+          "kpoints_spacing": null,
+          "hubbard_u": [
+            {"element": "Co", "orbital": "d", "u_ev": 3.5, "j_ev": 0.0}
+          ],
+          "surface": null,
+          "missing_fields_expected": [],
+          "evidence_expected": [
+            "encut_ev",
+            "kpoints_mesh",
+            "hubbard_u"
+          ],
+          "notes": "bulk 优化：MP 5×5×5；cutoff 400 eV；U(Co)=3.5 eV。"
+        },
+        {
+          "calculation_type": "relax",
+          "functional": "PBE+U",
+          "functional_family": "PBE+U",
+          "encut_ev": 400.0,
+          "kpoints_scheme": "monkhorst-pack",
+          "kpoints_mesh": [3, 3, 1],
+          "kpoints_spacing": null,
+          "hubbard_u": [
+            {"element": "Co", "orbital": "d", "u_ev": 3.5, "j_ev": 0.0}
+          ],
+          "surface": {
+            "miller": [1, 0, 0],
+            "layers": 8,
+            "vacuum_angstrom": null,
+            "termination": null,
+            "fixed_layers": 4,
+            "dipole_correction": null
+          },
+          "missing_fields_expected": [
+            "surface.vacuum_angstrom"
+          ],
+          "evidence_expected": [
+            "encut_ev",
+            "kpoints_mesh",
+            "hubbard_u",
+            "surface.layers",
+            "surface.fixed_layers"
+          ],
+          "notes": "slab 优化：MP 3×3×1；Co3O4(100) 8 个 Co 层，底部 4 层固定；原文未报告 vacuum。"
+        }
+      ]
+    },
+    {
+      "paper_filename": "Formation, Electronic Structure, and Defects of Ni Substituted Spinel Cobalt Oxide-a DFT+U Study.pdf",
+      "notes": "Ni 取代尖晶石 Co3O4 的 bulk DFT+U；QE 原文 cutoff 为 50 Ry（波函数），已换算为 eV。",
+      "expected_calculations": [
+        {
+          "calculation_type": "relax",
+          "functional": "PBE+U",
+          "functional_family": "PBE+U",
+          "encut_ev": 680.285,
+          "kpoints_scheme": "monkhorst-pack",
+          "kpoints_mesh": [3, 3, 3],
+          "kpoints_spacing": null,
+          "hubbard_u": [
+            {"element": "Co", "orbital": "d", "u_ev": 4.4, "j_ev": 0.0},
+            {"element": "Co", "orbital": "d", "u_ev": 6.7, "j_ev": 0.0},
+            {"element": "Ni", "orbital": "d", "u_ev": 6.6, "j_ev": 0.0}
+          ],
+          "surface": null,
+          "missing_fields_expected": [],
+          "evidence_expected": [
+            "encut_ev",
+            "kpoints_mesh",
+            "hubbard_u"
+          ],
+          "notes": "U_LR：Co(Td)=4.4 eV，Co(Oh)=6.7 eV，Ni=6.6 eV；MP 3×3×3；50 Ry = 50×13.6057 = 680.285 eV；另有 norm-conserving 100 Ry 测试未作为主计算。"
+        }
+      ]
+    },
+    {
+      "paper_filename": "Mechanism and activity of CO oxidation on (001) and (110) surfaces of spinel Co3O4, NiCo2O4 and NiFe2O4-A DFT + U study.pdf",
+      "notes": "CO 氧化 DFT+U：Co3O4/NCO 的 cutoff 为 35 Ry，NFO 为 50 Ry；所有表面 k 点 2×2×1、真空 20 Å；(001) 11 层，(110) 7 层；原文明确未加偶极校正。",
+      "expected_calculations": [
+        {
+          "calculation_type": "relax",
+          "functional": "PBE+U",
+          "functional_family": "PBE+U",
+          "encut_ev": 476.2,
+          "kpoints_scheme": "monkhorst-pack",
+          "kpoints_mesh": [2, 2, 1],
+          "kpoints_spacing": null,
+          "hubbard_u": [
+            {"element": "Co", "orbital": "d", "u_ev": 3.0, "j_ev": 0.0}
+          ],
+          "surface": {
+            "miller": [0, 0, 1],
+            "layers": 11,
+            "vacuum_angstrom": 20.0,
+            "termination": "oxygen and metal cations occupying octahedral sites in the bulk material",
+            "fixed_layers": null,
+            "dipole_correction": false
+          },
+          "missing_fields_expected": [],
+          "evidence_expected": [
+            "encut_ev",
+            "kpoints_mesh",
+            "hubbard_u",
+            "surface.layers",
+            "surface.vacuum_angstrom"
+          ],
+          "notes": "Co3O4(001)：35 Ry = 476.2 eV；MP 2×2×1；11 层；真空 20 Å；U(Co)=3.0 eV；未加偶极校正。"
+        },
+        {
+          "calculation_type": "relax",
+          "functional": "PBE+U",
+          "functional_family": "PBE+U",
+          "encut_ev": 476.2,
+          "kpoints_scheme": "monkhorst-pack",
+          "kpoints_mesh": [2, 2, 1],
+          "kpoints_spacing": null,
+          "hubbard_u": [
+            {"element": "Co", "orbital": "d", "u_ev": 3.0, "j_ev": 0.0}
+          ],
+          "surface": {
+            "miller": [1, 1, 0],
+            "layers": 7,
+            "vacuum_angstrom": 20.0,
+            "termination": "oxygen-rich",
+            "fixed_layers": null,
+            "dipole_correction": false
+          },
+          "missing_fields_expected": [],
+          "evidence_expected": [
+            "encut_ev",
+            "kpoints_mesh",
+            "hubbard_u",
+            "surface.layers",
+            "surface.vacuum_angstrom"
+          ],
+          "notes": "Co3O4(110)：35 Ry = 476.2 eV；MP 2×2×1；7 层 oxygen-rich；真空 20 Å；U(Co)=3.0 eV；未加偶极校正。"
+        },
+        {
+          "calculation_type": "relax",
+          "functional": "PBE+U",
+          "functional_family": "PBE+U",
+          "encut_ev": 476.2,
+          "kpoints_scheme": "monkhorst-pack",
+          "kpoints_mesh": [2, 2, 1],
+          "kpoints_spacing": null,
+          "hubbard_u": [
+            {"element": "Co", "orbital": "d", "u_ev": 3.0, "j_ev": 0.0},
+            {"element": "Ni", "orbital": "d", "u_ev": 5.5, "j_ev": 0.0}
+          ],
+          "surface": {
+            "miller": [0, 0, 1],
+            "layers": 11,
+            "vacuum_angstrom": 20.0,
+            "termination": "oxygen and metal cations occupying octahedral sites in the bulk material",
+            "fixed_layers": null,
+            "dipole_correction": false
+          },
+          "missing_fields_expected": [],
+          "evidence_expected": [
+            "encut_ev",
+            "kpoints_mesh",
+            "hubbard_u",
+            "surface.layers",
+            "surface.vacuum_angstrom"
+          ],
+          "notes": "NiCo2O4(001)：35 Ry = 476.2 eV；MP 2×2×1；11 层；真空 20 Å；U(Co)=3.0 eV、U(Ni)=5.5 eV；未加偶极校正。"
+        },
+        {
+          "calculation_type": "relax",
+          "functional": "PBE+U",
+          "functional_family": "PBE+U",
+          "encut_ev": 680.285,
+          "kpoints_scheme": "monkhorst-pack",
+          "kpoints_mesh": [2, 2, 1],
+          "kpoints_spacing": null,
+          "hubbard_u": [
+            {"element": "Ni", "orbital": "d", "u_ev": 5.5, "j_ev": 0.0},
+            {"element": "Fe", "orbital": "d", "u_ev": 3.5, "j_ev": 0.0},
+            {"element": "Fe", "orbital": "d", "u_ev": 3.4, "j_ev": 0.0}
+          ],
+          "surface": {
+            "miller": [0, 0, 1],
+            "layers": 11,
+            "vacuum_angstrom": 20.0,
+            "termination": "oxygen and metal cations occupying octahedral sites in the bulk material",
+            "fixed_layers": null,
+            "dipole_correction": false
+          },
+          "missing_fields_expected": [],
+          "evidence_expected": [
+            "encut_ev",
+            "kpoints_mesh",
+            "hubbard_u",
+            "surface.layers",
+            "surface.vacuum_angstrom"
+          ],
+          "notes": "NiFe2O4(001)：50 Ry = 680.285 eV；MP 2×2×1；11 层；真空 20 Å；U(Ni)=5.5 eV、U(Fe,Oh)=3.5 eV、U(Fe,Td)=3.4 eV；未加偶极校正。"
+        }
+      ]
+    },
+    {
+      "paper_filename": "Pressure-Induced Phase Transitions in Co3O4 a First- principles Study.pdf",
+      "notes": "高压 Co3O4：结构优化采用标准 DFT/PBE；磁性与电子性质采用 DFT+U U=3.0 eV。k 点以密度 0.03×2π Å⁻¹ 给出，无法映射为整数 mesh。",
+      "expected_calculations": [
+        {
+          "calculation_type": "relax",
+          "functional": "PBE",
+          "functional_family": "PBE",
+          "encut_ev": 800.0,
+          "kpoints_scheme": "monkhorst-pack",
+          "kpoints_mesh": null,
+          "kpoints_spacing": 0.03,
+          "hubbard_u": [],
+          "surface": null,
+          "missing_fields_expected": [
+            "kpoints_mesh"
+          ],
+          "evidence_expected": [
+            "encut_ev",
+            "kpoints_spacing"
+          ],
+          "notes": "结构优化：PBE；cutoff 800 eV；k-point grid density 0.03×2π Å⁻¹；原文未给出可直接映射的整数 k mesh。"
+        },
+        {
+          "calculation_type": "static",
+          "functional": "PBE+U",
+          "functional_family": "PBE+U",
+          "encut_ev": 800.0,
+          "kpoints_scheme": "monkhorst-pack",
+          "kpoints_mesh": null,
+          "kpoints_spacing": 0.03,
+          "hubbard_u": [
+            {"element": "Co", "orbital": "d", "u_ev": 3.0, "j_ev": 0.0}
+          ],
+          "surface": null,
+          "missing_fields_expected": [
+            "kpoints_mesh"
+          ],
+          "evidence_expected": [
+            "encut_ev",
+            "kpoints_spacing",
+            "hubbard_u"
+          ],
+          "notes": "电子/磁性性质：DFT+U，U(Co)=3.0 eV；cutoff 800 eV；k-point density 0.03×2π Å⁻¹；k mesh 为 null。"
+        }
+      ]
+    }
+  ]
+}
