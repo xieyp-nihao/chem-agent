@@ -233,6 +233,14 @@ class TestR5:
         assert report.missing_fields == ["parameters.kpoints"]
         assert [f.field for f in findings_of(report, "R5")] == ["parameters.kpoints"]
 
+    def test_missing_surface_layers(self):
+        surface = SurfaceModel(miller=(3, 1, 1), layers=None, vacuum_angstrom=16.0)
+        report = RuleValidator().validate(make_ctx(surface=surface))
+        assert "surface.layers" in report.missing_fields
+        assert any(
+            f.rule_id == "R5" and f.field == "surface.layers" for f in report.warnings
+        )
+
     def test_missing_both(self):
         report = RuleValidator().validate(make_ctx(encut=None, kpoints=None))
         assert len(findings_of(report, "R5")) == 2

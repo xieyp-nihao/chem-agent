@@ -170,7 +170,9 @@ class SurfaceModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     miller: tuple[int, int, int]
-    layers: int = Field(..., ge=1, le=30)                  # 沿表面法向的目标 hkl 平面/层数
+    # 文献侧允许未知（论文未报告层数时置 null，进入 R5 missing_fields）；
+    # 计算侧生成 slab 时必填（capability_check / SurfaceBuilder 校验）
+    layers: int | None = Field(default=None, ge=1, le=30)  # 沿表面法向的目标 hkl 平面/层数
     # 文献侧允许未知（论文未报告真空层时置 null，进入 R5 missing_fields）；
     # 计算侧生成 slab 时必填（SurfaceBuilder 校验）
     vacuum_angstrom: float | None = Field(default=None, ge=0.0, le=100.0)

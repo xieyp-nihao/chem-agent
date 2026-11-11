@@ -73,6 +73,10 @@ class SurfaceBuilder:
         # 0) 前置校验
         if all(i == 0 for i in surface.miller):
             raise ServiceError(3005, "SURFACE_GENERATION_FAILED", {"reason": "Miller 指数全为 0"})
+        if surface.layers is None:
+            raise ServiceError(
+                3005, "SURFACE_GENERATION_FAILED", {"reason": "生成 slab 必须提供层数（layers）"}
+            )
         if surface.vacuum_angstrom is None or surface.vacuum_angstrom <= 0:
             raise ServiceError(
                 3005, "SURFACE_GENERATION_FAILED", {"reason": "生成 slab 必须提供真空层厚度（> 0）"}

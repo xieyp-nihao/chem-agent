@@ -254,6 +254,7 @@ def _render_metrics(metrics) -> str:
 # ============ 真实 DeepSeek 评测 ============
 
 
+@pytest.mark.llm  # 真实 DeepSeek ×5（评测集逐篇抽取）
 def test_eval_extraction_all_cases(parsed_eval_papers):
     metrics = {k: {"tp": 0, "fp": 0, "fn": 0} for k in _TRACKED}
     metrics["missing"] = {"hit": 0, "total": 0}
@@ -307,6 +308,7 @@ _SYNTH_PBE_U_NO_U = (
 )
 
 
+@pytest.mark.llm  # 真实 DeepSeek（合成样本）
 def test_pbe_plus_u_without_u_precondition():
     calcs = asyncio.run(LLMExtractor().extract("synth-r1", _SYNTH_PBE_U_NO_U, [], []))
     assert len(calcs) >= 1
@@ -325,6 +327,7 @@ _SYNTH_HSE06 = (
 )
 
 
+@pytest.mark.llm  # 真实 DeepSeek（合成样本）
 def test_other_functional_family():
     calcs = asyncio.run(LLMExtractor().extract("synth-other", _SYNTH_HSE06, [], []))
     assert len(calcs) >= 1
@@ -393,6 +396,79 @@ def test_llm_unavailable_raises():
     with pytest.raises(ServiceError) as exc:
         asyncio.run(LLMExtractor(model=model).extract("fake", "method text.", [], []))
     assert exc.value.code == 5001
+
+
+# ============ 分数层数 / 单条失败隔离（B 修复） ============
+
+
+def _calc_item() -> dict:
+    return {
+        "system_formula": "Fe3O4",
+        "parameters": {
+            "calculation_type": "relax",
+            "functional": "PBE",
+            "functional_family": "PBE",
+            "hubbard_u": [],
+            "encut_ev": 520.0,
+            "kpoints": {"scheme": "gamma", "mesh": [3, 3, 1], "gamma_centered": True},
+            "evidence": [],
+        },
+        "surface": None,
+        "evidence": [],
+        "confidence": 0.9,
+    }
+
+
+def test_fractional_layers_rounded_with_note():
+    item = _calc_item()
+    item["surface"] = {"miller": [0, 0, 1], "layers": 7.5, "vacuum_angstrom": 10.6}
+    model = FakeModel([json.dumps({"calculations": [item]})])
+    calcs = asyncio.run(
+        LLMExtractor(model=model).extract("fake", "method text with layers.", [], [])
+    )
+    assert len(calcs) == 1
+    assert calcs[0].surface is not None
+    assert calcs[0].surface.layers == 8  # 7.5 → 8（四舍五入）
+    notes = calcs[0].parameters.notes or ""
+    assert "7.5" in notes and "8" in notes
+
+
+def test_missing_layers_accepted_as_none():
+    """论文未报告层数（如 La-Doped 论文）→ layers=None 应通过抽取，交给 R5 提示。"""
+    item = _calc_item()
+    item["surface"] = {"miller": [3, 1, 1], "layers": None, "vacuum_angstrom": 16.0}
+    model = FakeModel([json.dumps({"calculations": [item]})])
+    calcs = asyncio.run(
+        LLMExtractor(model=model).extract("fake", "method text with (311) slab.", [], [])
+    )
+    assert len(calcs) == 1
+    assert calcs[0].surface is not None
+    assert calcs[0].surface.layers is None
+
+
+def test_invalid_calculation_skipped_keeps_valid():
+    good = _calc_item()
+    bad = _calc_item()
+    bad["parameters"]["encut_ev"] = -5  # ge=50 失败
+    fractional = _calc_item()
+    fractional["surface"] = {"miller": [0, 0, 1], "layers": 7.5, "vacuum_angstrom": 10.6}
+    model = FakeModel([json.dumps({"calculations": [good, bad, fractional]})])
+    calcs = asyncio.run(
+        LLMExtractor(model=model).extract("fake", "method text.", [], [])
+    )
+    assert len(calcs) == 2  # 无效的第 2 条被跳过，其余保留
+    assert [c.surface.layers for c in calcs if c.surface] == [8]
+
+
+def test_all_invalid_raises_2004_with_detail():
+    bad = _calc_item()
+    bad["parameters"]["encut_ev"] = -5
+    payload = json.dumps({"calculations": [bad]})
+    model = FakeModel([payload, payload])  # 修复重试仍失败
+    with pytest.raises(ServiceError) as exc:
+        asyncio.run(LLMExtractor(model=model).extract("fake", "method text.", [], []))
+    assert exc.value.code == 2004
+    assert "全部 calculations 校验失败" in str(exc.value.details.get("reason"))
 
 
 def test_empty_method_text_rejected(tmp_path):

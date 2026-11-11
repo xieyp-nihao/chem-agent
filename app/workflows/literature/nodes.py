@@ -378,12 +378,16 @@ async def notify_missing(state: dict, services: LiteratureServices) -> dict:
 
 async def notify_failure(state: dict, services: LiteratureServices) -> dict:
     error = state.get("error") or _error(5005, "INTERNAL_ERROR")
+    details = error.get("details") or {}
+    detail = details.get("reason")
+    # 把校验/抽取的详细原因落到 papers.error_msg，前端状态区可直接展示
+    error_msg = f"{error.get('message')}: {detail}" if detail else error.get("message")
     await _update_paper(
         services,
         state["paper_id"],
         "failed",
         error_code=error.get("code"),
-        error_msg=error.get("message"),
+        error_msg=error_msg,
     )
     return {}
 

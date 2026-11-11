@@ -10,10 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
@@ -94,7 +93,58 @@ def _save_structure_upload(request: Request, session_id: str, upload: UploadFile
     return flat_name
 
 
-@router.post("/calc/draft")
+# Swagger/OpenAPI 文档用：该端点手动解析请求体（同时支持 JSON 与 multipart），
+# 没有 Pydantic body 参数，FastAPI 不会自动生成 requestBody。这里用 openapi_extra
+# 补充文档声明——只影响 /docs 与 /openapi.json，不改变运行时逻辑。
+_DRAFT_OPENAPI_EXTRA = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "可选；为空则新建"},
+                        "card_id": {"type": "string", "description": "可选；从参数卡片预填槽位"},
+                        "slots": {"type": "object", "additionalProperties": True},
+                    },
+                },
+                "example": {
+                    "slots": {
+                        "calculation_type": "relax",
+                        "functional": "PBE",
+                        "functional_family": "PBE",
+                        "formula": "Co3O4",
+                        "mp_id": "mp-18748",
+                        "encut_ev": 520.0,
+                        "kpoints": {"scheme": "gamma", "mesh": [3, 3, 1], "gamma_centered": True},
+                        "surface": {"miller": [1, 1, 1], "layers": 6, "vacuum_angstrom": 15.0},
+                    }
+                },
+            },
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "payload": {
+                            "type": "string",
+                            "description": "JSON 字符串，结构与 application/json 请求体相同",
+                        },
+                        "structure_file": {
+                            "type": "string",
+                            "format": "binary",
+                            "description": "可选；CIF/POSCAR 结构文件（优先于 mp_id/formula）",
+                        },
+                    },
+                    "required": ["payload"],
+                },
+            },
+        },
+    }
+}
+
+
+@router.post("/calc/draft", openapi_extra=_DRAFT_OPENAPI_EXTRA)
 async def create_draft(request: Request):
     content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
     session_id: str | None = None

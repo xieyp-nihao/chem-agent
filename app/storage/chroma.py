@@ -24,7 +24,7 @@ COLLECTION_NAME = "param_cards"
 
 
 class VectorHit(BaseModel):
-    """一条向量检索命中（§4.8 引用；定义暂存此处，S3 迁共享位置）。"""
+    """一条向量检索命中（§4.8 引用；VectorHit 长期定义在此）。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -46,7 +46,8 @@ def build_document(card: CalculationCard) -> str:
     if card.surface is not None:
         s = card.surface
         miller = "".join(str(i) for i in s.miller)
-        surface_text = f"({miller}) {s.layers} layers, vacuum {s.vacuum_angstrom} Å"
+        layers_text = s.layers if s.layers is not None else "unknown"
+        surface_text = f"({miller}) {layers_text} layers, vacuum {s.vacuum_angstrom} Å"
     else:
         surface_text = ""
     lines = [

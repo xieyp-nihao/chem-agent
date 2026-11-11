@@ -10,15 +10,13 @@
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import interrupt
 from pymatgen.core import Structure
 
@@ -30,7 +28,6 @@ from app.domain.schemas import (
     DFTParameters,
     FunctionalFamily,
     StructureRecord,
-    SurfaceModel,
     ValidationReport,
     VASPDraft,
 )

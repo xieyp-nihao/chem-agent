@@ -4,7 +4,7 @@
   data/chem-agent.db 同一文件，setup() 幂等，上下文管理器负责释放连接）
   → 组装 services → 编译文献图挂到 app.state
 - Chroma 不可用只记 warning，不阻断启动
-- 不做 CORS / /health / 其他路由（S8）
+- 已实现 CORS、/health、四个 router（documents / chat / calc / files）
 """
 from __future__ import annotations
 

@@ -154,6 +154,13 @@ class TestSurfaceBuilder:
         assert slab_result.miller == (1, 1, 1)
         assert slab_result.layers == 6
 
+    def test_build_requires_layers(self, bulk):
+        """文献侧允许 layers=None（R5 提示）；计算侧生成 slab 必须拒绝。"""
+        surface = SurfaceModel(miller=(1, 1, 1), layers=None, vacuum_angstrom=15.0)
+        with pytest.raises(ServiceError) as exc:
+            SurfaceBuilder().build(bulk, surface)
+        assert exc.value.code == 3005
+
 
 # ============ VASPGenerator ============
 
@@ -187,7 +194,7 @@ class TestVASPGenerator:
             surface_model,
         )
         incar = Incar.from_str(draft.incar)
-        for tag in ("LDAU", "LDAUTYPE", "LDAUL", "LDAUU", "LDAUJ", "LMAXMIX"):
+        for tag in ("LDAU", "LDAUTYPE", "LDAUL", "LDAUU", "LDAUJ", "LMAXMIX", "LDAUPRINT"):
             assert tag not in incar, f"纯 PBE 的 INCAR 不应包含 {tag}"
         assert any("剥除预设的 +U" in w for w in draft.warnings)
 

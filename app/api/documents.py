@@ -73,7 +73,6 @@ async def _run_graph(app, paper_id: str, pdf_path: str) -> None:
         # 返回值含 __interrupt__ 即正常暂停（needs_review 已由节点落库），无需处理
     except Exception:  # 图内异常兜底：落 failed，不抛出
         logger.exception("literature graph unexpected failure: %s", paper_id)
-        from app.workflows.literature.nodes import _update_paper  # 复用状态更新
 
         async with app.state.session_factory() as s:
             row = await s.get(Paper, paper_id)
@@ -147,6 +146,23 @@ def _iso(dt) -> str:
     return dt.replace(tzinfo=timezone.utc).isoformat() if dt.tzinfo is None else dt.isoformat()
 
 
+def _card_brief(card) -> dict:
+    """卡片列表视图（含 created_at；供前端 Table 使用）。"""
+    return {
+        "card_id": str(card.card_id),
+        "paper_id": card.paper_id,
+        "system_formula": card.system_formula,
+        "system_normalized": card.system_normalized,
+        "calculation_type": card.parameters.calculation_type.value,
+        "functional": card.parameters.functional,
+        "functional_family": card.parameters.functional_family.value,
+        "missing_fields": card.missing_fields,
+        "review_status": card.review_status,
+        "created_at": _iso(card.created_at),
+        "updated_at": _iso(card.updated_at),
+    }
+
+
 async def _document_status(request: Request, paper_id: str):
     cards = await request.app.state.query_cards.find_by_paper(paper_id)
     return {
@@ -158,11 +174,30 @@ async def _document_status(request: Request, paper_id: str):
         "error_msg": None,
         "error_code": None,
         "card_ids": [str(c.card_id) for c in cards],
+        "cards": [_card_brief(c) for c in cards],
         "pending_action": None,
         "thread_id": f"lit:{paper_id}",
+        "review_request": None,
         "created_at": None,
         "updated_at": None,
     }
+
+
+async def _read_review_request(request: Request, thread_id: str) -> dict | None:
+    """只读读取暂停中的 review_request（不 resume、不推进审核轮次）。"""
+    try:
+        state = await request.app.state.literature_graph.aget_state(
+            {"configurable": {"thread_id": thread_id}}
+        )
+    except Exception:  # 图不可用时不影响状态查询
+        logger.exception("read review_request failed: %s", thread_id)
+        return None
+    for task in getattr(state, "tasks", ()) or ():
+        for intr in getattr(task, "interrupts", ()) or ():
+            value = getattr(intr, "value", None)
+            if isinstance(value, dict) and value.get("type") == "review_request":
+                return value
+    return None
 
 
 @router.get("/documents/{paper_id}")
@@ -183,6 +218,8 @@ async def get_document(request: Request, paper_id: str):
             "created_at": _iso(row.created_at),
             "updated_at": _iso(row.updated_at),
         })
+        if row.status == "needs_review":
+            data["review_request"] = await _read_review_request(request, row.thread_id)
         return ok_response(request, data)
 
 
@@ -198,6 +235,9 @@ async def retry_document(request: Request, paper_id: str, background_tasks: Back
                 request, 2006, "DOCUMENT_STATE_CONFLICT",
                 {"reason": f"status={row.status} 不允许 retry（仅 failed/method_not_found）"},
             )
+        # 删除旧 checkpoint：否则同一 thread_id 重新 invoke 会继承旧状态
+        # （如 review_round=3 的失败现场），retry 从 round 4 开始直接失败
+        await request.app.state.literature_graph.checkpointer.adelete_thread(f"lit:{paper_id}")
         row.status = "queued"
         row.error_code = None
         row.error_msg = None

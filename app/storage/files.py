@@ -4,8 +4,6 @@
 - sanitize：只保留 [A-Za-z0-9._-]，长度 ≤128，禁止以 . 开头
 - 写入/读取前 resolve() 必须位于允许子根（papers/structures/outputs）之下
 - 越界抛 ServiceError(code=6002, message="PATH_FORBIDDEN")
-
-ServiceError 为最小占位定义（S3 阶段迁移到 app.core.exceptions）。
 """
 from __future__ import annotations
 

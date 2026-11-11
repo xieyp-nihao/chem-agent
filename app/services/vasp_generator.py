@@ -55,6 +55,10 @@ def _bottom_plane_indices(structure: Structure, surface: SurfaceModel) -> list[i
     slab 结构已 reorient：面间距无法直接从（bulk 坐标系下的）miller 得到，
     用 span/layers 估计：bin = floor((z_n - z_min) / d_est)，clamp 到 layers-1。
     """
+    if surface.layers is None:
+        raise ServiceError(
+            3006, "DRAFT_VALIDATION_FAILED", {"reason": "缺少 surface.layers，无法生成固定层"}
+        )
     a = np.array(structure.lattice.matrix[0], dtype=float)
     b = np.array(structure.lattice.matrix[1], dtype=float)
     n = np.cross(a, b)
@@ -102,7 +106,7 @@ class VASPGenerator:
         # MPRelaxSet/MPStaticSet 会带入 Materials Project 兼容参数（如 Co3O4 的
         # LDAU=3.32）；用户请求纯 PBE 时不继承 +U（剥除而非设 False，避免残留空标签）
         if slots.functional_family is not FunctionalFamily.PBE_U:
-            for tag in ("LDAU", "LDAUTYPE", "LDAUL", "LDAUU", "LDAUJ", "LMAXMIX"):
+            for tag in ("LDAU", "LDAUTYPE", "LDAUL", "LDAUU", "LDAUJ", "LMAXMIX", "LDAUPRINT"):
                 if tag in incar:
                     incar.pop(tag)
                     if tag == "LDAU":

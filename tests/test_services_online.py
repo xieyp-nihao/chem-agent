@@ -107,6 +107,7 @@ def _make_card(
 
 
 class TestMPClient:
+    @pytest.mark.llm  # 真实 MP 调用（mp-18748 结构）
     @pytest.mark.asyncio
     async def test_get_bulk_by_mp_id(self, mp_cache_dir):
         client = MPClient(api_key=settings.MP_API_KEY, cache_dir=mp_cache_dir)
@@ -124,6 +125,7 @@ class TestMPClient:
             f"mp-18748 原胞 {len(record.structure)} 原子 × 4 ≠ CIF 常规胞 {len(cif)} 原子"
         )
 
+    @pytest.mark.llm  # 真实 MP 调用（化学式查询）
     @pytest.mark.asyncio
     async def test_get_bulk_by_formula(self, mp_cache_dir):
         client = MPClient(api_key=settings.MP_API_KEY, cache_dir=mp_cache_dir)
@@ -138,6 +140,7 @@ class TestMPClient:
         assert hasattr(record, "energy_above_hull")  # 字段存在；本环境 legacy API 恒为 None
         assert record.num_sites > 0
 
+    @pytest.mark.llm  # 首次调用真实 MP（第二次走缓存）
     @pytest.mark.asyncio
     async def test_cache_hit_no_network(self, mp_cache_dir):
         client = MPClient(api_key=settings.MP_API_KEY, cache_dir=mp_cache_dir)
@@ -152,6 +155,7 @@ class TestMPClient:
         assert record.formula_normalized == "Co3O4"
         assert any("缓存命中" in w for w in record.warnings)
 
+    @pytest.mark.llm  # 真实向 MP 发请求（无效 key 触发 401）
     @pytest.mark.asyncio
     async def test_invalid_key_raises_3004(self, tmp_path):
         # 独立空缓存目录：共享 mp_cache_dir 里已有 mp-18748 缓存，会绕过网络
@@ -256,6 +260,7 @@ def _make_store(tmp_path) -> ChromaStore:
 
 
 class TestVectorSearcher:
+    @pytest.mark.llm  # 真实嵌入模型加载 + Chroma（模型加载重；判断项见报告）
     @pytest.mark.asyncio
     async def test_upsert_and_search_real(self, tmp_path):
         store = _make_store(tmp_path)
@@ -297,6 +302,7 @@ class TestVectorSearcher:
             await searcher.upsert(_make_card())
         assert exc.value.code == 5002
 
+    @pytest.mark.llm  # is_available 分支会加载真实嵌入模型（判断项见报告）
     @pytest.mark.asyncio
     async def test_querycards_chroma_integration(self, session_factory, tmp_path):
         await _seed_paper(session_factory, "p1")

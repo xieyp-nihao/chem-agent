@@ -46,6 +46,17 @@ _PAPER_B = next(FIXTURES.glob("papers/A DFT and microkinetic*"))
 # ============ 构造器 ============
 
 
+class FailingExtractor:
+    """模拟 LLMExtractor 抛出带 details 的抽取失败。"""
+
+    async def extract(self, paper_id, method_text, tables, captions):
+        raise ServiceError(
+            2004,
+            "EXTRACTION_FAILED",
+            {"reason": "calculations[0] 校验失败: surface.layers 非整数"},
+        )
+
+
 class FakeExtractor:
     """LLMExtractor 测试替身：按 paper_id 返回固定抽取结果。"""
 
@@ -172,6 +183,52 @@ class TestUploadFlow:
             assert status["pending_action"] == "review"
             assert status["thread_id"] == f"lit:{paper_id}"
 
+    def test_extraction_failure_detail_in_status(self, tmp_path):
+        """B 修复：详细校验原因应落到 papers.error_msg，前端状态区可见。"""
+        app, _, _ = _make_app(tmp_path, FailingExtractor())
+        with TestClient(app) as client:
+            with open(_PAPER_A, "rb") as f:
+                r = client.post("/documents/upload", files={"file": ("p.pdf", f.read(), "application/pdf")})
+            paper_id = r.json()["data"]["paper_id"]
+            status = client.get(f"/documents/{paper_id}").json()["data"]
+            assert status["status"] == "failed"
+            assert status["error_code"] == 2004
+            assert "surface.layers" in (status["error_msg"] or "")
+
+    def test_document_status_exposes_review_request_and_cards(self, tmp_path):
+        """F2 前端依赖：GET 状态需返回审核候选（review_request）与卡片详情（cards）。"""
+        app, _, _ = _make_app(tmp_path, FakeExtractor([_calc(encut=None)]))
+        with TestClient(app) as client:
+            with open(_PAPER_A, "rb") as f:
+                r = client.post("/documents/upload", files={"file": ("p.pdf", f.read(), "application/pdf")})
+            paper_id = r.json()["data"]["paper_id"]
+
+            status = client.get(f"/documents/{paper_id}").json()["data"]
+            assert status["status"] == "needs_review"
+            review = status["review_request"]
+            assert review is not None and review["type"] == "review_request"
+            assert len(review["candidates"]) == 1
+            assert "findings" in review["candidates"][0]
+            assert status["cards"] == []
+
+            decisions = [
+                {"index": c["index"], "decision": "approve"}
+                for c in review["candidates"]
+            ]
+            client.post("/chat", json={
+                "paper_id": paper_id, "action": "review",
+                "payload": {"decisions": decisions},
+            })
+
+            status2 = client.get(f"/documents/{paper_id}").json()["data"]
+            assert status2["status"] == "saved"
+            assert status2["review_request"] is None
+            assert len(status2["cards"]) == 1
+            card = status2["cards"][0]
+            assert card["system_normalized"] == "Co3O4"
+            assert card["created_at"]
+
+    @pytest.mark.llm  # 真实嵌入模型加载 + Chroma（chroma_available=True）
     def test_review_approve_flow(self, tmp_path):
         app, _, engine = _make_app(tmp_path, FakeExtractor([_calc(encut=None)]), chroma_available=True)
         with TestClient(app) as client:
@@ -347,6 +404,61 @@ async def _fetch_cards(engine):
         return (await s.execute(select(Card))).scalars().all()
 
 
+# ============ retry 重置 checkpoint（P1：3 轮耗尽 failed 后 retry 必须从头跑） ============
+
+
+class QueuedExtractor:
+    """按队列返回抽取结果：第一次 error 样本、第二次干净样本。"""
+
+    def __init__(self, results):
+        self._queue = list(results)
+
+    async def extract(self, paper_id, method_text, tables, captions):
+        if self._queue:
+            return [self._queue.pop(0)]
+        return []
+
+
+class TestRetryResetsCheckpoint:
+    def test_retry_after_review_exhaustion_runs_fresh(self, tmp_path):
+        pbeu_no_u = ExtractedCalculation(
+            system_formula="Co3O4",
+            parameters=DFTParameters(
+                calculation_type=CalculationType.RELAX,
+                functional="PBE+U", functional_family=FunctionalFamily.PBE_U,
+                hubbard_u=[],
+                encut_ev=520.0,
+                kpoints=KPoints(scheme=KPointsScheme.GAMMA, mesh=(3, 3, 1), gamma_centered=True),
+            ),
+            confidence=0.9,
+        )
+        extractor = QueuedExtractor([pbeu_no_u, _calc()])
+        app, _, _ = _make_app(tmp_path, extractor)
+        with TestClient(app) as client:
+            with open(_PAPER_A, "rb") as f:
+                r = client.post("/documents/upload", files={"file": ("p.pdf", f.read(), "application/pdf")})
+            paper_id = r.json()["data"]["paper_id"]
+            status = client.get(f"/documents/{paper_id}").json()["data"]
+            assert status["status"] == "needs_review"
+
+            # 连续 3 次 approve（R1 error 候选 approve 无效）→ 3 轮上限 → failed(2005)
+            for _ in range(3):
+                client.post("/chat", json={
+                    "paper_id": paper_id, "action": "review",
+                    "payload": {"decisions": [{"index": 0, "decision": "approve"}]},
+                })
+            failed = client.get(f"/documents/{paper_id}").json()["data"]
+            assert failed["status"] == "failed"
+            assert failed["error_code"] == 2005
+
+            # retry：必须从零开始（旧 checkpoint 已删，不能从 round 4 直接失败）
+            retry = client.post(f"/documents/{paper_id}/retry")
+            assert retry.status_code == 202
+            saved = client.get(f"/documents/{paper_id}").json()["data"]
+            assert saved["status"] == "saved"
+            assert len(saved["card_ids"]) == 1
+
+
 # ============ 审核去重（方案 A：跨轮已决索引，重复 decisions 不二次保存） ============
 
 
@@ -355,6 +467,13 @@ class TwoCalcExtractor:
 
     async def extract(self, paper_id, method_text, tables, captions):
         return [_calc(encut=None), _calc(encut=None)]
+
+
+class ThreeCalcExtractor:
+    """返回三条候选（均缺 encut → R5 warning → 触发审核）。"""
+
+    async def extract(self, paper_id, method_text, tables, captions):
+        return [_calc(encut=None), _calc(encut=None), _calc(encut=None)]
 
 
 class TestReviewDedup:
@@ -395,6 +514,160 @@ class TestReviewDedup:
         async with services.session_factory() as s:
             cards = (await s.execute(select(Card))).scalars().all()
             assert len(cards) == 2
+        await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_full_decisions_with_prior_approved_and_reject(self, tmp_path):
+        """边界 1：客户端全量提交（已决 approve + 新 approve + reject）。
+
+        P0 bug：跨轮已决索引未持久化，客户端按 payload 全量决策时已批准候选被
+        二次批准（2 抽取产出 3 卡）。方案 A：prior_decided 去重 + pending 排除
+        跨轮已决。本用例验证：3 候选，第 1 轮 approve 0，第 2 轮全量提交
+        [approve 0(已决), approve 1, reject 2] → 不产生重复卡片、index 0 只保存一次、
+        reject 生效，最终 2 张卡。
+        """
+        services, engine = _make_services(tmp_path, ThreeCalcExtractor())
+        await _create_tables(engine)
+        await _seed_paper(services.session_factory, "p1")
+
+        from langgraph.checkpoint.memory import InMemorySaver
+        from langgraph.types import Command as Cmd
+
+        graph = build_literature_graph(InMemorySaver(), services)
+        cfg = {"configurable": {"thread_id": "lit:p1"}}
+        out1 = await graph.ainvoke(
+            {"paper_id": "p1", "pdf_path": str(_PAPER_A)}, config=cfg
+        )
+        assert "__interrupt__" in out1
+
+        out2 = await graph.ainvoke(
+            Cmd(resume={"decisions": [{"index": 0, "decision": "approve"}]}), config=cfg
+        )
+        assert "__interrupt__" in out2
+
+        out3 = await graph.ainvoke(
+            Cmd(resume={"decisions": [
+                {"index": 0, "decision": "approve"},  # 已决 → 跳过
+                {"index": 1, "decision": "approve"},
+                {"index": 2, "decision": "reject"},
+            ]}),
+            config=cfg,
+        )
+        assert out3.get("status") == "approved"
+        approved_idx = sorted(a["index"] for a in out3.get("approved", []))
+        rejected_idx = sorted(r["index"] for r in out3.get("rejected", []))
+        assert approved_idx == [0, 1]  # index 0 只出现一次
+        assert rejected_idx == [2]
+        saved = out3.get("saved_card_ids", [])
+        assert len(saved) == 2 and len(set(saved)) == 2
+        await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_indices_in_single_round(self, tmp_path):
+        """边界 2：同一轮 decisions 里 index 重复（两个 index 0）。
+
+        P0 bug 的变体：不跨轮、同轮重复。human_review 的 decided 表在本轮内
+        去重（"idx in decided → 忽略无效 decision"），应不抛异常、只应用一次。
+        """
+        services, engine = _make_services(tmp_path, TwoCalcExtractor())
+        await _create_tables(engine)
+        await _seed_paper(services.session_factory, "p1")
+
+        from langgraph.checkpoint.memory import InMemorySaver
+        from langgraph.types import Command as Cmd
+
+        graph = build_literature_graph(InMemorySaver(), services)
+        cfg = {"configurable": {"thread_id": "lit:p1"}}
+        out1 = await graph.ainvoke(
+            {"paper_id": "p1", "pdf_path": str(_PAPER_A)}, config=cfg
+        )
+        assert "__interrupt__" in out1
+
+        out2 = await graph.ainvoke(
+            Cmd(resume={"decisions": [
+                {"index": 0, "decision": "approve"},
+                {"index": 0, "decision": "approve"},  # 同轮重复 → 忽略
+            ]}),
+            config=cfg,
+        )
+        assert "__interrupt__" in out2  # 候选 1 pending → 自环
+
+        out3 = await graph.ainvoke(
+            Cmd(resume={"decisions": [{"index": 1, "decision": "approve"}]}), config=cfg
+        )
+        assert out3.get("status") == "approved"
+        saved = out3.get("saved_card_ids", [])
+        assert len(saved) == 2 and len(set(saved)) == 2
+        await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_full_decisions_across_three_rounds_with_error(self, tmp_path):
+        """边界 3：跨 3 轮，每轮客户端都提交全量 decisions（含已决 index），
+        其中候选 2 带 error（approve 无效，需 reject 收尾）。
+
+        P0 bug：全量提交 + 多轮 → 已决候选被重复累计。方案 A 的 prior_decided
+        每轮从 state.approved/rejected 重建。本用例验证 3 轮后 approved 无重复、
+        卡片数 = 实际已批准的不同 index 数（2 张），reject 的候选不产卡。
+        """
+        pbeu_no_u = ExtractedCalculation(
+            system_formula="Co3O4",
+            parameters=DFTParameters(
+                calculation_type=CalculationType.RELAX,
+                functional="PBE+U", functional_family=FunctionalFamily.PBE_U,
+                hubbard_u=[],
+                encut_ev=520.0,
+                kpoints=KPoints(scheme=KPointsScheme.GAMMA, mesh=(3, 3, 1), gamma_centered=True),
+            ),
+            confidence=0.9,
+        )
+        class MixedExtractor:
+            async def extract(self, paper_id, method_text, tables, captions):
+                return [_calc(encut=None), _calc(encut=None), pbeu_no_u]
+        services, engine = _make_services(tmp_path, MixedExtractor())
+        await _create_tables(engine)
+        await _seed_paper(services.session_factory, "p1")
+
+        from langgraph.checkpoint.memory import InMemorySaver
+        from langgraph.types import Command as Cmd
+
+        graph = build_literature_graph(InMemorySaver(), services)
+        cfg = {"configurable": {"thread_id": "lit:p1"}}
+        out1 = await graph.ainvoke(
+            {"paper_id": "p1", "pdf_path": str(_PAPER_A)}, config=cfg
+        )
+        assert "__interrupt__" in out1
+
+        # 第 1 轮：approve 0
+        out2 = await graph.ainvoke(
+            Cmd(resume={"decisions": [{"index": 0, "decision": "approve"}]}), config=cfg
+        )
+        assert "__interrupt__" in out2
+        # 第 2 轮：全量 [approve 0(已决), approve 1, approve 2(error→无效)]
+        out3 = await graph.ainvoke(
+            Cmd(resume={"decisions": [
+                {"index": 0, "decision": "approve"},
+                {"index": 1, "decision": "approve"},
+                {"index": 2, "decision": "approve"},
+            ]}),
+            config=cfg,
+        )
+        assert "__interrupt__" in out3  # 候选 2 仍 pending（error approve 无效）→ 自环
+        # 第 3 轮：全量 [approve 0(已决), approve 1(已决), reject 2]
+        out4 = await graph.ainvoke(
+            Cmd(resume={"decisions": [
+                {"index": 0, "decision": "approve"},
+                {"index": 1, "decision": "approve"},
+                {"index": 2, "decision": "reject"},
+            ]}),
+            config=cfg,
+        )
+        assert out4.get("status") == "approved"
+        approved_idx = sorted(a["index"] for a in out4.get("approved", []))
+        rejected_idx = sorted(r["index"] for r in out4.get("rejected", []))
+        assert approved_idx == [0, 1]  # 各出现一次，无重复
+        assert rejected_idx == [2]
+        saved = out4.get("saved_card_ids", [])
+        assert len(saved) == 2 and len(set(saved)) == 2
         await engine.dispose()
 
 
@@ -439,6 +712,7 @@ class TestCheckpointerRestart:
 
 
 class TestRealDeepSeekE2E:
+    @pytest.mark.llm  # 真实 DeepSeek 端到端
     @pytest.mark.asyncio
     async def test_full_chain_with_real_llm(self, tmp_path):
         services, engine = _make_services(tmp_path, LLMExtractor())

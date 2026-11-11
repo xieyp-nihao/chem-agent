@@ -1,7 +1,7 @@
 """聊天入口（§7.2）。
 
-S6 只实现 action=review（文献审核恢复）；action=message 由 S8 实现、
-action=confirm 由 S7 实现，当前返回 HTTP 501 占位。
+action=review 走文献审核恢复；action=message 分发到 _handle_message，
+action=confirm 分发到 _handle_confirm。
 """
 from __future__ import annotations
 

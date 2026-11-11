@@ -150,6 +150,7 @@ def _confirm(client, session_id, decision, patch=None):
 
 
 class TestCalcDraftFlow:
+    @pytest.mark.llm  # 真实 MP 调用（mp_id=mp-18748）
     def test_json_draft_with_mp_approve_writes_files(self, tmp_path):
         app, _, _, _ = _make_app(tmp_path)
         with TestClient(app) as client:
@@ -380,6 +381,7 @@ class TestCalcRestart:
 
 
 class TestRealSlotParsing:
+    @pytest.mark.llm  # 真实 DeepSeek 槽位解析 + 真实 MP formula 调用
     @pytest.mark.asyncio
     async def test_natural_language_slots_with_real_llm(self, tmp_path):
         calc, engine, _, _ = _make_calc_services(tmp_path, real_llm=True)

@@ -163,6 +163,7 @@ class TestLLMFallback:
     async def test_timeout_clarify(self):
         assert await llm_classify(SleepingLLM(), "任意") == "clarify"  # 10s 超时
 
+    @pytest.mark.llm  # 真实 DeepSeek（llm_fallback 真实分类）
     @pytest.mark.asyncio
     async def test_real_deepseek(self):
         from langchain_core.messages import HumanMessage, SystemMessage

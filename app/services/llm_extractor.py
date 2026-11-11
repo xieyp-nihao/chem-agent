@@ -67,6 +67,32 @@ def _clean_model_dict(obj: Any, cls: type) -> dict:
     return out
 
 
+def _coerce_fractional_layers(item: dict, index: int) -> list[str]:
+    """论文可能出现小数层数（如 7.5 full monolayers）；Schema 要求 int。
+
+    四舍五入为整数并把原始值写入 notes（不静默改数据）；返回归一化说明列表。
+    """
+    surface = item.get("surface")
+    if not isinstance(surface, dict):
+        return []
+    raw = surface.get("layers")
+    if raw is None:
+        return []
+    value = raw
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            return []
+    if isinstance(value, float) and not value.is_integer():
+        rounded = int(value + 0.5) if value >= 0 else -int(-value + 0.5)
+        surface["layers"] = rounded
+        note = f"calculations[{index}].surface.layers={raw!r} 非整数，已四舍五入为 {rounded}"
+        logger.warning(note)
+        return [note]
+    return []
+
+
 def _clean_item(item: Any) -> dict:
     """对 LLM 输出的 calculation 元素做嵌套宽容清理。"""
     if not isinstance(item, dict):
@@ -120,7 +146,7 @@ _SYSTEM_PROMPT = """你是计算化学文献参数抽取器。任务：从论文
 6. hubbard_u：泛函为 PBE+U/DFT+U 且原文给出 U 数值 → 数组（元素/轨道/u_ev）；纯 PBE 无 U → 空数组 []；+U 但原文未给数值 → 空数组 []（不要编造常见值）。同一元素可有多条（不同格位），站点信息写进该条 evidence.quote。
 7. functional_family：PBE → "PBE"；PBE+U（含 DFT+U）→ "PBE+U"；其他（HSE06、SCAN、B3LYP 等）→ "other"（functional 保留归一化展示名，照常抽取，不要跳过）。
 8. evidence：尽量给字段级证据；quote 必须逐字复制自输入文本；field 用点路径（如 "parameters.encut_ev"）；source 用 "text"（方法段）、"table"（表格）、"caption"（表注）；page 用输入中的页码标记（没有则 null）。
-9. surface：论文描述了表面模型才给；miller 是 Miller 指数三元组 [h,k,l]；layers 是论文表述的层数；vacuum_angstrom 是真空层厚度（Å）。
+9. surface：论文描述了表面模型才给；miller 是 Miller 指数三元组 [h,k,l]；layers 必须是整数（若论文写 7.5 这类分数层，四舍五入取整并在 notes 记录原始值）；vacuum_angstrom 是真空层厚度（Å）。
 10. calculation_type：结构优化/弛豫 → "relax"；单点/电子结构计算 → "static"。
 
 每个 calculation 元素的 JSON Schema（可省字段用默认值）：
@@ -258,16 +284,21 @@ class LLMExtractor:
         if not isinstance(items, list) or not items:
             raise ServiceError(2004, "EXTRACTION_FAILED", {"reason": "calculations 缺失或为空"})
         calcs: list[ExtractedCalculation] = []
+        failures: list[str] = []
         for i, item in enumerate(items):
+            if not isinstance(item, dict):
+                failures.append(f"calculations[{i}]: 不是对象")
+                continue
+            cleaned = _clean_item(item)
+            layer_notes = _coerce_fractional_layers(cleaned, i)
             try:
-                calc = ExtractedCalculation.model_validate(_clean_item(item))
+                calc = ExtractedCalculation.model_validate(cleaned)
             except ValidationError as exc:
                 summary = "; ".join(
                     f"{'.'.join(str(x) for x in e['loc'])}: {e['msg']}" for e in exc.errors()[:10]
                 )
-                raise ServiceError(
-                    2004, "EXTRACTION_FAILED", {"reason": f"calculations[{i}] 校验失败: {summary}"}
-                ) from exc
+                failures.append(f"calculations[{i}] 校验失败: {summary}")
+                continue
             # §3.4：functional 归一化 + family 由 normalizer 计算并写入。
             # 保留 LLM 的 +U 意图：LLM 可能写 functional="PBE" + family="PBE+U"
             # （或带 hubbard_u），归一化时不能把 +U 抹掉。
@@ -280,7 +311,20 @@ class LLMExtractor:
             else:
                 name = raw_name
                 fam = family_of(name)
-            params = raw_params.model_copy(update={"functional": name, "functional_family": fam})
+            updates: dict[str, Any] = {"functional": name, "functional_family": fam}
+            if layer_notes:
+                existing = raw_params.notes or ""
+                note_text = "；".join(layer_notes)
+                updates["notes"] = f"{existing}\n[抽取归一化] {note_text}" if existing else f"[抽取归一化] {note_text}"
+            params = raw_params.model_copy(update=updates)
             calcs.append(calc.model_copy(update={"parameters": params}))
-        logger.info("extract ok: calculations=%d", len(calcs))
+
+        if not calcs:
+            detail = "；".join(failures[:10]) or "无有效计算"
+            raise ServiceError(
+                2004, "EXTRACTION_FAILED", {"reason": f"全部 calculations 校验失败: {detail}"}
+            )
+        if failures:
+            logger.warning("跳过 %d 条无效计算：%s", len(failures), "；".join(failures[:10]))
+        logger.info("extract ok: calculations=%d skipped=%d", len(calcs), len(failures))
         return calcs
