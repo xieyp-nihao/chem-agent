@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | 1.0 |
-| 日期 | 2026-11-04 |
-| 状态 | 设计定稿（待实现） |
+| 文档版本 | 1.1 |
+| 日期 | 2026-11-11 |
+| 状态 | 设计定稿 + F2/F3/B 修复已落地 |
 | 对应任务书 | `docs/task.md` |
 | 技术栈基线 | `requirements.txt` + 本文 §2.5 增补 |
 | 目标读者 | 后端、算法、计算化学领域开发 |
 
-> 本文是实现前的设计契约。文中出现的 Python 类型、表结构、JSON 示例均为设计稿，不代表已经存在对应实现。
+> 本文是实现契约；标注已落地的章节与当前代码一致，未标注部分为后续规划。
 
 ---
 
@@ -179,13 +179,13 @@ flowchart TB
 ```text
 chem-agent/
 ├─ app/
-│  ├─ main.py                      # FastAPI 实例、lifespan、异常处理、CORS、request_id
+│  ├─ main.py                      # FastAPI 实例、lifespan、异常处理、CORS、request_id、GET /health
 │  ├─ config.py                    # pydantic-settings、路径与密钥
 │  ├─ api/
-│  │  ├─ chat.py                   # POST /chat（含 review/confirm 恢复）
+│  │  ├─ chat.py                   # POST /chat（message/review/confirm）
 │  │  ├─ documents.py              # upload / status / retry
 │  │  ├─ calc.py                   # POST /calc/draft（JSON + multipart）
-│  │  └─ files.py                  # GET /files/{path}、GET /health
+│  │  └─ files.py                  # GET /files/{path}
 │  ├─ orchestrator/
 │  │  ├─ intent_split.py           # 四连接词拆分，最多两段
 │  │  ├─ router.py                 # rule_router
@@ -214,20 +214,47 @@ chem-agent/
 │  │  ├─ schemas.py
 │  │  ├─ rules.py                  # R1-R7
 │  │  └─ normalizer.py
-│  └─ storage/
-│     ├─ db.py                     # SQLAlchemy async engine/models
-│     ├─ chroma.py                 # PersistentClient + embedding function
-│     └─ files.py                  # 安全路径、读写、清理
+│  ├─ storage/
+│  │  ├─ db.py                     # SQLAlchemy async engine/models
+│  │  ├─ chroma.py                 # PersistentClient + embedding function
+│  │  └─ files.py                  # 安全路径、读写、清理
+│  └─ core/
+│     └─ exceptions.py             # ServiceError 等异常体系
 ├─ scripts/
 │  ├─ init_db.py
-│  ├─ seed_papers.py
-│  └─ reindex_cards.py             # 从 SQLite 重建 Chroma（新增）
+│  ├─ demo.py                      # 端到端演示
+│  └─ reindex_cards.py             # planned（尚未实现）：从 SQLite 重建 Chroma
 ├─ tests/
+│  ├─ test_calc_workflow.py
+│  ├─ test_literature_workflow.py
+│  ├─ test_llm_extractor.py
+│  ├─ test_orchestrator.py
 │  ├─ test_rules.py
-│  ├─ test_services.py
-│  └─ eval_set.json                # 由 eval_set.json.py 改名
+│  ├─ test_services_offline.py
+│  ├─ test_services_online.py
+│  ├─ test_storage.py
+│  ├─ eval_set.json
+│  └─ fixtures/
 ├─ docs/
-│  └─ technical-design.md
+│  ├─ task.md
+│  ├─ technical-design.md
+│  ├─ paper-extraction-report.md
+│  ├─ testing-notes.md
+│  ├─ resume-and-interview.md
+│  └─ demo-recording-guide.md
+├─ frontend/
+│  ├─ src/
+│  │  ├─ api/                      # client / types / health / documents / calc / chat
+│  │  ├─ components/               # AppLayout
+│  │  ├─ pages/                    # HealthPage / DocumentsPage / CalcPage / ChatPage
+│  │  ├─ App.tsx
+│  │  └─ main.tsx
+│  ├─ index.html
+│  ├─ package.json
+│  ├─ package-lock.json
+│  ├─ tsconfig.json
+│  ├─ vite.config.ts
+│  └─ .env.development
 ├─ data/
 │  ├─ papers/
 │  ├─ structures/
@@ -236,6 +263,8 @@ chem-agent/
 │  └─ chem-agent.db
 ├─ requirements.txt
 ├─ README.md
+├─ CHANGELOG.md
+├─ pytest.ini
 └─ .env                            # 不提交
 ```
 
@@ -867,7 +896,10 @@ class LLMExtractor:
 - 结构化输出：使用 JSON mode（`response_format={"type": "json_object"}`）+ Pydantic 校验；**不依赖 tool calling**，以避免 DeepSeek 兼容性差异。
 - Prompt 明确：只输出 JSON；不得编造；缺失字段用 `null`；每个字段尽量给 `evidence`；按“一次计算一个对象”返回数组；非 PBE/PBE+U 泛函照常抽取并标记 `functional_family=other`。
 - 输入拼装：方法段优先；表格/表注按与方法段的相关性排序；总字符预算约 24,000 字符（可配置），超限时先截断表格、再截断方法段尾部，并记录 `warnings`。
-- 校验失败：把 Pydantic 错误摘要回传模型，**最多修复重试 1 次**；仍失败抛 `EXTRACTION_FAILED`。
+- **单条失败隔离**：对 `calculations[i]` 逐条 `model_validate`；单条失败只跳过该条并记 warning，继续处理其余条目；仅当 JSON 非法、`calculations` 为空或**全部条目**失败时抛 `EXTRACTION_FAILED`（2004）。
+- **分数层数归一化**：`surface.layers` 若为小数（如 7.5），四舍五入为整数，并把原始值以 `[抽取归一化] ...` 追加到 `parameters.notes`，不静默改数据。
+- **宽容清理**：校验前丢弃未知键；非必填且有默认值的字段若为 `null`，回退默认值。
+- **修复重试触发条件**：仅整体解析失败时把 Pydantic 错误摘要回传模型，最多重试 1 次；部分条目失败不触发重试。
 - 不写数据库、不建卡片、不调用 RuleValidator；规则校验由工作流节点完成。
 - 不把整篇 PDF 送入 LLM；只接收 PDFParser 产出的方法段/表格/表注。
 
@@ -1029,7 +1061,7 @@ notes: {notes}
 - metadata 只放标量：`card_id`、`paper_id`、`system_normalized`、`calculation_type`、`functional_family`、`has_surface`、`review_status`、`missing_count`、`created_at`。
 - `id = card_id`；`upsert` 幂等。
 - 向量检索是**辅助路径**：精确缓存检查用 SQL `paper_id`（§5.2），Chroma 用于“没有 paper_id 时找相似卡片/为计算侧推荐 card_id”。
-- Chroma 失败不阻断卡片保存：SQLite 仍是事实源；卡片 `chroma_indexed=0`，由 `scripts/reindex_cards.py` 补偿。
+- Chroma 失败不阻断卡片保存：SQLite 仍是事实源；卡片 `chroma_indexed=0`，由 planned 的 `scripts/reindex_cards.py` 补偿（尚未实现）。
 
 **错误**：`VECTOR_STORE_UNAVAILABLE`（查询/写入失败）。
 
@@ -1527,7 +1559,7 @@ erDiagram
 - metadata 值只能是 `str/int/float/bool`；复杂结构不进 metadata。
 - 写入时机：`save_cards` 成功后；`upsert` 幂等。
 - 更新时机：卡片重新审核/修改后 `upsert`；删除卡片时 `delete`。
-- 一致性：SQLite 是事实源；Chroma 失败不阻断保存，`cards.chroma_indexed=0`；`scripts/reindex_cards.py` 扫描 `chroma_indexed=0` 的卡片重建。
+- 一致性：SQLite 是事实源；Chroma 失败不阻断保存，`cards.chroma_indexed=0`；planned 的 `scripts/reindex_cards.py` 扫描 `chroma_indexed=0` 的卡片重建（尚未实现）。
 - 首次启动会下载模型（约 470 MB）；失败时禁用语义检索并返回 `VECTOR_STORE_UNAVAILABLE`，不影响 SQL 路径。
 
 ### 6.4 文件系统
@@ -1766,7 +1798,7 @@ file=@Co3O4_paper.pdf
 
 ### 7.4 `GET /documents/{paper_id}`
 
-**成功：**
+**成功（needs_review）：**
 
 ```json
 {
@@ -1782,8 +1814,63 @@ file=@Co3O4_paper.pdf
     "error_msg": null,
     "error_code": null,
     "card_ids": [],
+    "cards": [],
     "pending_action": "review",
     "thread_id": "lit:9f2c...",
+    "review_request": {
+      "type": "review_request",
+      "paper_id": "9f2c...",
+      "thread_id": "lit:9f2c...",
+      "round": 1,
+      "candidates": [
+        {
+          "index": 0,
+          "system_formula": "Co3O4",
+          "system_normalized": "Co3O4",
+          "parameters": {},
+          "surface": null,
+          "findings": [],
+          "missing_fields": [],
+          "evidence": []
+        }
+      ]
+    },
+    "created_at": "2026-11-04T00:00:00Z",
+    "updated_at": "2026-11-04T00:01:10Z"
+  }
+}
+```
+
+**成功（saved，展示 cards 字段）：**
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "request_id": "5b8d...",
+  "data": {
+    "type": "document_status",
+    "paper_id": "9f2c...",
+    "status": "saved",
+    "card_ids": ["c1..."],
+    "cards": [
+      {
+        "card_id": "c1...",
+        "paper_id": "9f2c...",
+        "system_formula": "Co3O4",
+        "system_normalized": "Co3O4",
+        "calculation_type": "relax",
+        "functional": "PBE+U",
+        "functional_family": "PBE+U",
+        "missing_fields": [],
+        "review_status": "reviewed",
+        "created_at": "2026-11-04T00:01:00Z",
+        "updated_at": "2026-11-04T00:01:00Z"
+      }
+    ],
+    "pending_action": null,
+    "thread_id": "lit:9f2c...",
+    "review_request": null,
     "created_at": "2026-11-04T00:00:00Z",
     "updated_at": "2026-11-04T00:01:10Z"
   }
@@ -1791,7 +1878,9 @@ file=@Co3O4_paper.pdf
 ```
 
 - `pending_action`：`review` / `confirm`（本接口只会有 review）/ null。
-- `card_ids`：已保存卡片。
+- `card_ids`：已保存卡片的 ID 列表，保留兼容。
+- `cards`：卡片 brief 数组，含 `system_formula`、`system_normalized`、`calculation_type`、`functional`、`functional_family`、`missing_fields`、`review_status`、`created_at`、`updated_at`；无卡片时为空数组。
+- `review_request`：仅 `status=needs_review` 时非 null；从暂停图**只读**读取（不 resume、不推进审核轮次）；图不可用时为 null。字段与 `/chat` 的 `review_request` 一致。
 - 不存在 → 404 + `PAPER_NOT_FOUND`。
 
 ### 7.5 `POST /documents/{paper_id}/retry`
@@ -2032,7 +2121,7 @@ flowchart LR
 |---|---|---|---|---|
 | LLM 不可用 | 文献抽取、自然语言槽位解析、`llm_fallback` | 规则路由仍可用；结构化 `/calc/draft`（槽位齐全）仍可生成；文献后台任务失败 | `/chat` 返回 5001；`papers.status=failed`；`/calc/draft` 若无需 LLM 正常 | 恢复后 `POST /documents/{id}/retry`；用户重发消息 |
 | MP 不可用 | 按 `formula`/`mp_id` 取结构的计算 | 已有 CIF 上传路径仍可用；不缓存失败结果 | 503 + 3004，附“上传 CIF 继续” | 恢复后重试；CIF 用户不受影响 |
-| Chroma 不可用 | 语义检索、卡片向量写入 | SQLite 卡片保存不受影响；`chroma_indexed=0`；cache_check 用 SQL 仍命中 | 保存成功但 warning；语义查询 503 + 5002 | `scripts/reindex_cards.py` 重建 |
+| Chroma 不可用 | 语义检索、卡片向量写入 | SQLite 卡片保存不受影响；`chroma_indexed=0`；cache_check 用 SQL 仍命中 | 保存成功但 warning；语义查询 503 + 5002 | planned 的 `scripts/reindex_cards.py` 重建（尚未实现） |
 | 嵌入模型不可用 | 同上 | 与 Chroma 不可用同路径 | 5002；首次下载失败日志明确 | 预下载模型/挂载缓存目录 |
 | SQLite 不可用 | 全部有状态接口 | 无法读写 paper/card/session/checkpoint；服务不可用 | 503 + 5003；`/health` down | 修复磁盘/权限/锁；重启 |
 | checkpointer 不可用 | HitL review/confirm | 文献上传仍可解析，但无法暂停审核；计算无法确认 | 503 + 5004；已有暂停图不可恢复 | 修复 DB/包；重启 |

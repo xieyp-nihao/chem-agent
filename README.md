@@ -4,7 +4,7 @@
 
 ## 技术栈
 
-Python 3.11 · FastAPI · LangGraph 1.0.9（LangChain 1.2.10）· pymatgen · ChromaDB + sentence-transformers · SQLite（SQLAlchemy async）· DeepSeek（LLM 抽取/兜底/槽位解析）
+Python 3.11 · FastAPI · LangGraph 1.0.9（LangChain 1.2.10）· pymatgen · ChromaDB + sentence-transformers · SQLite（SQLAlchemy async）· DeepSeek（LLM 抽取/兜底/槽位解析）· 前端：React 18 + Vite 5 + TypeScript 5 + Ant Design 5 + React Router 6
 
 ## 快速开始
 
@@ -21,7 +21,16 @@ python scripts/init_db.py
 HF_HUB_OFFLINE=1 uvicorn app.main:app --reload --workers 1
 ```
 
+```bash
+# 前端（另开终端）
+cd frontend
+npm install
+npm run dev      # http://127.0.0.1:5173，/api 代理到 127.0.0.1:8000
+npm run build    # tsc --noEmit && vite build
+```
+
 - Swagger：`http://127.0.0.1:8000/docs`
+- 前端：`http://127.0.0.1:5173`（四个页面：健康 `/`、助手 `/chat`、文献 `/documents`、计算 `/calc`）
 - 演示脚本：`python scripts/demo.py --base-url http://127.0.0.1:8000 [--paper <pdf 路径>]`
   （真实调用全链路：上传论文 → 抽取/审核 → 生成草案 → 确认 → 下载 INCAR）
 
@@ -124,27 +133,35 @@ flowchart TB
 
 依赖方向严格自上而下；领域层（Schema、R1–R7 规则、归一化）不依赖任何其他层，是两条工作流共享的语义层。
 
+前端为独立 Vite SPA（React 18 + TypeScript + Ant Design），经 `/api` 代理访问后端；四页为健康 `/`、助手 `/chat`、文献 `/documents`、计算 `/calc`。
+
 ## 核心能力
 
 - **文献侧**：上传 PDF → 定位方法段与相关表格/表注 → DeepSeek 结构化抽取（一次计算一个对象、逐字段证据）→ R1–R7 规则校验 → error/warning 触发人工审核（HitL，最多 3 轮）→ 参数卡片入库（SQLite + Chroma 向量索引）。
 - **计算侧**：自然语言或结构化槽位（合并优先级：当前请求 > 卡片 > 会话）→ 能力边界检查（仅 relax/static × PBE/PBE+U）→ Materials Project 或 CIF 取结构、按需生成 slab → pymatgen 预设 + 领域覆盖生成草案 → 人工确认（approve/patch/abort，patch 只允许 INCAR 级字段）→ 落盘输出文件。
 - **编排层**：四个连接词（另外/还有/同时/顺便）拆分意图、最多两段串行互不阻断；关键词规则路由 + LLM 兜底分类；paper_id 精确缓存与向量语义检索分路；会话槽位跨请求复用。
+- **前端（F4）**：健康 `/`、助手 `/chat`、文献 `/documents`、计算 `/calc` 四页；统一 `request<T>()` + `ApiError`，覆盖健康检查、文献上传/审核、计算草案/确认/下载、对话路由。
 
 ## 测试
 
 ```bash
-# 全量（约 28 分钟；含真实 DeepSeek/MP 调用，慢端点为环境因素）
-pytest tests/ -v
+# 非 LLM 日常回归（197 passed / 约 4m18；必须加 HF_HUB_OFFLINE=1）
+HF_HUB_OFFLINE=1 PYTHONIOENCODING=utf-8 pytest tests/ -m "not llm" -q
 
-# 非 LLM 五文件（约 22 分钟；仍含文献套件的 1 个真实 LLM 端到端用例）
-pytest tests/test_rules.py tests/test_storage.py tests/test_services_offline.py \
-       tests/test_services_online.py tests/test_literature_workflow.py -q
+# 全量（约 28 分钟；211 用例 = 197 非 LLM + 14 个 @pytest.mark.llm 真实调用）
+HF_HUB_OFFLINE=1 PYTHONIOENCODING=utf-8 pytest tests/ -q
+
+# 前端构建（0 TS 错误）
+cd frontend && npm run build
 ```
+
+全量回归含 14 个 `@pytest.mark.llm` 用例；其中文献套件 **2 个**（`test_review_approve_flow`、`test_full_chain_with_real_llm`），不是 1 个。
 
 ## 第一版边界（明确不支持）
 
 - 多结构/缺陷任务（氧空位/缺陷形成能）、界面/异质结、过渡态、AIMD、声子、能带/DOS、GW、HSE06/SCAN/r2SCAN——`capability_check` 直接拒绝并给出替代建议。
-- 扫描版/图片型 PDF（不做 OCR）；非 VASP 软件（DMol3、Quantum ESPRESSO 等）的论文可能抽取失败（LLM 输出校验不通过）。
+- 扫描版/图片型 PDF（不做 OCR）。
+- 当前针对 VASP 参数体系优化；DMol3 等其他 DFT 软件、方法段过简的论文可能抽取失败，详见 [docs/paper-extraction-report.md](docs/paper-extraction-report.md)。
 - 非 PBE/PBE+U 的 VASP 生成（文献侧可抽取、计算侧拒绝）。
 - 不生成/分发 POTCAR；不执行 DFT 计算本身。
 
@@ -159,9 +176,24 @@ app/
 ├─ domain/          # Pydantic Schema、R1–R7 规则、归一化
 ├─ storage/         # SQLite ORM、ChromaStore、FileStore
 └─ core/            # 异常体系（ServiceError 等）
-scripts/            # init_db、demo（端到端演示）
+scripts/            # init_db、demo（端到端演示）；reindex_cards.py 为 planned
 tests/              # 各层测试 + 评测集（tests/eval_set.json、fixtures/）
-docs/               # 任务书与技术方案（technical-design.md）
+docs/               # 任务书、技术方案、抽取报告、测试笔记、面试材料、录屏指南
+frontend/
+├─ src/
+│  ├─ api/          # client / types / health / documents / calc / chat
+│  ├─ components/   # AppLayout
+│  ├─ pages/        # HealthPage / DocumentsPage / CalcPage / ChatPage
+│  ├─ App.tsx
+│  └─ main.tsx
+├─ index.html
+├─ package.json
+├─ package-lock.json
+├─ tsconfig.json
+├─ vite.config.ts
+└─ .env.development
+CHANGELOG.md        # 版本变更记录
+pytest.ini          # pytest marker 配置
 ```
 
 详细设计见 [`docs/technical-design.md`](docs/technical-design.md)。
